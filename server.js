@@ -1,9 +1,14 @@
-import express from 'express';
+import express, { json } from 'express';
 import mongoose from 'mongoose';
 import 'dotenv/config';
 import bcrypt from 'bcrypt';
 import { nanoid } from 'nanoid';
 import jwt from 'jsonwebtoken';
+import cors from 'cors';
+import admin from 'firebase-admin';
+import { getAuth } from "firebase-admin/auth";
+import serviceAccountKey from "./event-flow-d8d7f-firebase-adminsdk-6t1o6-f0ea896a05.json" assert { type: "json" };
+
 
 // import Schema below
 import User from './Schema/User.js';
@@ -11,12 +16,17 @@ import User from './Schema/User.js';
 const server = express();
 let PORT = 3000;
 
+admin.initializeApp({
+    credential: admin.credential.cert(serviceAccountKey)
+})
+
 // regex
 let emailRegex = /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/; // regex for email
 let passwordRegex = /^(?=.*\d)(?=.*[a-z])(?=.*[A-Z]).{6,20}$/; // regex for password
 
 // middleware
 server.use(express.json());
+server.use(cors());
 
 mongoose.connect(process.env.DB_LOCATION, {
     autoIndex: true
@@ -111,6 +121,51 @@ server.post("/signin", (req, res) => {
         .catch(err => {
             console.log(err.message);
             return res.status(403).json({ "error": err.message })
+        })
+})
+
+server.post("/google-auth", async (req, res) => {
+    let { access_token } = req.body;
+
+    getAuth()
+        .verifyIdToken(access_token)
+        .then(async (decodedUser) => {
+            let { email, name, picture } = decodedUser;
+
+            picture = picture.replace("s96-c", "s384-c")
+
+            let user = await User.findOne({ "perspersonal_info.email": email }).select("personal_info.profile_img personal_info.username personal_info.fullname google_auth").then((u) => {
+                return u || null
+            })
+                .catch(err => {
+                    return res.status(500).json({ "error": err.message })
+                })
+
+            if (user) {
+                if (!user.google_auth) {
+                    return res.status(403).json({ "error": "This email was signed up without google. Please log in with password to access the account" })
+                } else {
+                    let username = generateUsername(email)
+
+                    user = new User({
+                        personal_info: { fullname: name, email },
+                        google_auth: true
+                    })
+
+                    await user.save().then((u) => {
+                        user = u;
+                    })
+                        .catch(err => {
+                            return res.status(500).json({ "error": err.message })
+                        })
+                }
+            }
+
+            return res.status(200).json(formatDataToSend(user))
+
+        })
+        .catch(err => {
+            return res.status(500).json({ "error": "Failed to authenticate you with google. Try with some other google account" })
         })
 })
 
