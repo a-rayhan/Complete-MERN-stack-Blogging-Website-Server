@@ -1,8 +1,7 @@
-POST http://localhost:3000/signin
+POST http://localhost:3000/create-blog
 Content-Type: application/json
+Authorization: Bearer dfdsgsg
 
 {
-    "fullname": "Abu Rayhan",
-    "email": "aburayhan@gmail.com",
-    "password": "aburayhan"
+    "blogname": "Blog goes here"
 }

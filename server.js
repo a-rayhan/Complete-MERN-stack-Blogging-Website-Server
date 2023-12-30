@@ -12,6 +12,7 @@ import serviceAccountKey from "./event-flow-d8d7f-firebase-adminsdk-6t1o6-f0ea89
 
 // import Schema below
 import User from './Schema/User.js';
+import Blog from './Schema/Blog.js';
 
 const server = express();
 let PORT = 3000;
@@ -31,6 +32,24 @@ server.use(cors());
 mongoose.connect(process.env.DB_LOCATION, {
     autoIndex: true
 });
+
+const verifyJWT = (req, res, next) => {
+    const authHeader = req.header('authorization');
+    const token = authHeader && authHeader.split(" ")[1];
+
+    if (token == null) {
+        return res.status(401).json({ "error": "No access token" })
+    }
+
+    jwt.verify(token, process.env.SECRET_ACCESS_KEY, (err, user) => {
+        if (err) {
+            return res.status(403).json({ "error": "Access token is invlaid" })
+        }
+
+        req.user = user.id;
+        next();
+    })
+}
 
 const formatDataToSend = (user) => {
 
@@ -167,6 +186,43 @@ server.post("/google-auth", async (req, res) => {
         .catch(err => {
             return res.status(500).json({ "error": "Failed to authenticate you with google. Try with some other google account" })
         })
+})
+
+
+server.post('/create-blog', verifyJWT, (req, res) => {
+    let authorId = req.user;
+    let { title, des, banner, tags, content, draft } = req.body;
+
+    if (!title.length) {
+        return res.status(403).json({ "error": "You must provide a tittle to publish blog" })
+    }
+
+    if (!draft) {
+        if (!des.length || des.length > 200) {
+            return res.status(403).json({ "error": "You must provide description under 200 characters" })
+        }
+    }
+
+    tags = tags.map(tag => tag.toLowerCase());
+
+    let blog_id = title.replace(/[^a-zA-Z0-9]/g).replace(/\s+/g, "-").trim() + nanoid();
+
+    let blog = new Blog({
+        title, des, banner, content, tags, author: authorId, blog_id, draft: Boolean(draft)
+    })
+
+    blog.save().then(blog => {
+        let increamentVal = draft ? 0 : 1;
+
+        User.findOneAndUpdate({ _id: authorId }, { $inc: { "account_info.total_posts": increamentVal }, $push: { "blogs": blog._id } })
+            .then(user => {
+                res.status(200).json({ id: blog.blog_id })
+            }).catch(err => {
+                res.status(500).json({ "error": "Failed to update total posts number" })
+            })
+    }).catch(err => {
+        res.status(500).json({ error: err.message })
+    })
 })
 
 
