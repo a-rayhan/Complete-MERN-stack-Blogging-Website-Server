@@ -1,1 +1,6 @@
-GET http://localhost:3000/trending-blogs
+POST http://localhost:3000/search-users
+Content-Type: application/json
+
+{
+    "query": "abu"
+}
