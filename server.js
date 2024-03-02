@@ -7,12 +7,14 @@ import jwt from 'jsonwebtoken';
 import cors from 'cors';
 import admin from 'firebase-admin';
 import { getAuth } from "firebase-admin/auth";
-import serviceAccountKey from "./event-flow-d8d7f-firebase-adminsdk-6t1o6-f0ea896a05.json" assert { type: "json" };
+import serviceAccountKey from "./event-flow-d8d7f-firebase-adminsdk-6t1o6-f8b5673cbf.json" assert { type: "json" };
 
 
 // import Schema below
 import User from './Schema/User.js';
 import Blog from './Schema/Blog.js';
+import Notification from './Schema/Notification.js';
+import Comment from './Schema/Comment.js';
 
 const server = express();
 let PORT = 3000;
@@ -239,19 +241,19 @@ server.get('/trending-blogs', (req, res) => {
 server.post("/search-blogs", (req, res) => {
 
 
-    let { tag, query, author, page } = req.body;
+    let { tag, query, author, page, limit, eliminate_blog } = req.body;
 
     let findQuery;
 
     if (tag) {
-        findQuery = { tags: tag, draft: false };
+        findQuery = { tags: tag, draft: false, blog_id: { $ne: eliminate_blog } };
     } else if (query) {
         findQuery = { draft: false, title: new RegExp(query, 'i') };
     } else if (author) {
         findQuery = { author, draft: false };
     }
 
-    let maxLimit = 2;
+    let maxLimit = limit ? limit : 2;
 
     Blog.find(findQuery)
         .populate("author", "personal_info.profile_img personal_info.fullname personal_info.username -_id")
@@ -321,7 +323,7 @@ server.post("/search-blogs-count", (req, res) => {
 
 server.post('/create-blog', verifyJWT, (req, res) => {
     let authorId = req.user;
-    let { title, des, banner, tags, content, draft } = req.body;
+    let { title, des, banner, tags, content, draft, id } = req.body;
 
     if (!title.length) {
         return res.status(403).json({ "error": "You must provide a tittle to publish blog" })
@@ -335,26 +337,176 @@ server.post('/create-blog', verifyJWT, (req, res) => {
 
     tags = tags.map(tag => tag.toLowerCase());
 
-    let blog_id = title.replace(/[^a-zA-Z0-9]/g).replace(/\s+/g, "-").trim() + nanoid();
+    let blog_id = id || title.replace(/[^a-zA-Z0-9]/g).replace(/\s+/g, "-").trim() + nanoid();
 
-    let blog = new Blog({
-        title, des, banner, content, tags, author: authorId, blog_id, draft: Boolean(draft)
-    })
 
-    blog.save().then(blog => {
-        let increamentVal = draft ? 0 : 1;
+    if (id) {
 
-        User.findOneAndUpdate({ _id: authorId }, { $inc: { "account_info.total_posts": increamentVal }, $push: { "blogs": blog._id } })
-            .then(user => {
-                res.status(200).json({ id: blog.blog_id })
-            }).catch(err => {
+        Blog.findOneAndUpdate({ blog_id }, { title, des, banner, content, tags, draft: draft ? draft : false })
+            .then(() => {
+                res.status(200).json({ id: blog_id })
+            })
+            .catch(err => {
                 res.status(500).json({ "error": "Failed to update total posts number" })
             })
-    }).catch(err => {
-        res.status(500).json({ error: err.message })
+
+    } else {
+        let blog = new Blog({
+            title, des, banner, content, tags, author: authorId, blog_id, draft: Boolean(draft)
+        })
+
+        blog.save().then(blog => {
+            let increamentVal = draft ? 0 : 1;
+
+            User.findOneAndUpdate({ _id: authorId }, { $inc: { "account_info.total_posts": increamentVal }, $push: { "blogs": blog._id } })
+                .then(user => {
+                    res.status(200).json({ id: blog.blog_id })
+                }).catch(err => {
+                    res.status(500).json({ "error": "Failed to update total posts number" })
+                })
+        }).catch(err => {
+            res.status(500).json({ error: err.message })
+        })
+    }
+
+})
+
+server.post("/get-blog", (req, res) => {
+
+    let { blog_id, draft, mode } = req.body;
+
+    let increamentVal = mode !== "edit" ? 1 : 0;
+
+    Blog.findOneAndUpdate({ blog_id }, { $inc: { "activity.total_reads": increamentVal } })
+        .populate("author", "personal_info.fullname personal_info.username personal_info.profile_img")
+        .select("title des content banner activity publishedAt blog_id tags")
+        .then(blog => {
+
+            User.findOneAndUpdate({ "personal_info.username": blog.author.personal_info.username }, {
+                $inc: { "account_info.total_reads": increamentVal }
+            })
+                .catch(err => {
+                    return res.status(500).json({ error: err.message })
+                })
+
+            if (blog.draft && !draft) {
+                return res.status(500).json({ error: "You can not access draft blogs" })
+            }
+
+            return res.status(200).json({ blog })
+        })
+        .catch(err => {
+            return res.status(500).json({ error: err.message })
+        })
+})
+
+server.post("/like-blog", verifyJWT, (req, res) => {
+    let user_id = req.user;
+
+    let { _id, isLikedByUser } = req.body;
+
+    let increamentVal = !isLikedByUser ? 1 : -1;
+
+    Blog.findOneAndUpdate({ _id }, { $inc: { "activity.total_likes": increamentVal } })
+        .then((blog) => {
+            console.log();
+
+            if (!isLikedByUser) {
+                let like = new Notification({
+                    type: "like",
+                    blog: _id,
+                    notification_for: blog.author,
+                    user: user_id,
+                })
+
+                like.save().then(notification => {
+                    return res.status(200).json({ liked_by_user: true })
+                })
+            } else {
+                Notification.findOneAndDelete({ user: user_id, type: "like", blog: _id })
+                    .then(data => {
+                        return res.status(200).json({ liked_by_user: false })
+                    })
+                    .catch(err => {
+                        return res.status(500).json({ error: err.message })
+                    })
+            }
+
+        })
+})
+
+server.post("/isliked-by-user", verifyJWT, (req, res) => {
+    let user_id = req.user;
+
+    let { _id } = req.body;
+
+    Notification.exists({ user: user_id, type: "like", blog: _id })
+        .then(result => {
+            return res.status(200).json({ result })
+        })
+        .catch(err => {
+            return res.status(500).json({ error: err.message })
+        })
+})
+
+server.post("/add-comment", verifyJWT, (req, res) => {
+    let user_id = req.user;
+
+    let { _id, comment, blog_author } = req.body;
+
+    if (!comment.length) {
+        return res.status(403).json({ error: "Write something to leave a comment" })
+    }
+
+    let commentObj = new Comment({
+        blog_id: _id, blog_author, comment, commented_by: user_id,
+    })
+
+    commentObj.save().then((commentFile) => {
+
+        console.log(commentFile);
+        let { comment, commentedAt, children } = commentFile;
+
+        Blog.findOneAndUpdate({ _id }, { $push: { "comments": commentFile._id }, $inc: { "activity.total_comments": 1, "activity.total_parent_comments": 1 } })
+            .then(blog => { console.log("New comment created"); })
+
+        let notificationObj = {
+            type: "comment",
+            blog: _id,
+            notification_for: blog_author,
+            user: user_id,
+            comment: commentFile._id
+        }
+
+        new Notification(notificationObj).save().then(notification => console.log("New notification created"))
+
+        return res.status(200).json({
+            comment, commentedAt, _id: commentFile._id, user_id, children
+        })
     })
 })
 
+server.post("/get-blog-comments", (req, res) => {
+    let { blog_id, skip } = req.body;
+
+    let maxLimit = 5;
+
+    Comment.find({ blog_id, isReply: false })
+        .populate("commented_by", "personal_info.username personal_info.fullname personal_info.profile_img")
+        .skip(skip)
+        .limit(maxLimit)
+        .sort({
+            "commentedAt": -1
+        })
+
+        .then(comment => {
+            return res.status(200).json(comment)
+        })
+        .catch(err => {
+            console.log(err.message);
+            return res.status(500).json({ error: err.message })
+        })
+})
 
 server.listen(PORT, () => {
     console.log("Listening on port" + PORT);

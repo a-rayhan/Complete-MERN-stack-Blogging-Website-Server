@@ -1,3 +1,10 @@
+# POST http://localhost:3000/get-blog
+# Content-Type: application/json
+
+# {
+#     "blog_id": "WhatundefinedisundefinedCSSundefinedBoxundefinedModelundefinedundefinedundefinedCompleteundefinedguideundefinedonundefinedBoxundefinedmodelundefinedundefinedundefinedMarginundefinedundefinedPaddingundefinedundefinedBorderundefinedundefinedundefinedContentR5XvGu8o2Rhokp_D8Yuba"
+# }
+
 POST http://localhost:3000/get-profile
 Content-Type: application/json
 
